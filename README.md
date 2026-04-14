@@ -12,13 +12,16 @@ A collection of spatial database design, optimization, and analysis projects usi
 - Built materialized views for pre-computed change detection statistics.
 - **Tools**: PostgreSQL 15, PostGIS 3.3, pgAdmin, ArcGIS Pro (database connection)
 
-### 2. Network Analysis for Transport Routing (Dijkstra Algorithm)
-**Use Case**: Optimal route computation for emergency response and infrastructure planning.
+### 2. Narok County Network Analysis — pgRouting Practical
+**Use Case**: Shortest path routing and service area analysis on real OSM road data for Narok County, Kenya.
 
-- Implemented pgRouting extension with Dijkstra's shortest path algorithm on road network datasets.
-- Loaded and topologized OpenStreetMap road networks into PostGIS using `osm2pgrouting`.
-- Created custom cost functions incorporating road type, distance, and elevation data.
-- **Tools**: PostgreSQL, PostGIS, pgRouting, QGIS, Python (psycopg2)
+- Imported OpenStreetMap road network (~36.835°E, -1.276°S) into PostGIS using `osm2pgrouting` with custom highway tag configuration.
+- Implemented Dijkstra's shortest path algorithm via pgRouting on the `ways` table with topology nodes in `ways_vertices_pgr`.
+- Built coordinate-based routing functions, nearest-vertex lookup, and service area (isochrone) analysis using `pgr_drivingDistance`.
+- Created GeoJSON export queries for web mapping integration and POI proximity analysis.
+- Validated network topology: dead-end detection, isolated segment identification, and graph analysis.
+- **SQL**: [`sql/narok_network_analysis_practical.sql`](sql/narok_network_analysis_practical.sql)
+- **Tools**: PostgreSQL, PostGIS, pgRouting, osm2pgrouting, QGIS (pgRouting Layer plugin), OpenStreetMap
 
 ### 3. Land Parcel Management System (LIMS)
 **Use Case**: Cadastral land information management for county governments.
@@ -107,24 +110,35 @@ JOIN land_cover_classes lc ON cr1.class_id = lc.id
 ORDER BY cr1.study_area_id, cr1.epoch_year, lc.class_name;
 ```
 
-## Network Analysis Sample
+## Network Analysis Sample (Narok County)
 
 ```sql
--- pgRouting: Dijkstra Shortest Path
-CREATE EXTENSION IF NOT EXISTS pgrouting;
+-- pgRouting: Dijkstra Shortest Path on Narok County OSM road network
+-- Import OSM data: osm2pgrouting --f map.osm --conf mapconfig.xml --dbname network_analysis
 
--- Create topology from road network
-SELECT pgr_createTopology('road_network', 0.00001, 'geom', 'id');
-
--- Find shortest path between two nodes
-SELECT seq, id1 AS node, id2 AS edge, cost, geom
+-- Find shortest path between vertices 76 and 1005
+SELECT d.seq, d.node, d.edge, d.cost, d.agg_cost, w.the_geom
 FROM pgr_dijkstra(
-    'SELECT id, source, target, st_length(geom::geography) AS cost FROM road_network',
-    (SELECT source FROM road_network ORDER BY geom <-> ST_SetSRID(ST_MakePoint(35.85, -0.35), 4326) LIMIT 1),
-    (SELECT source FROM road_network ORDER BY geom <-> ST_SetSRID(ST_MakePoint(35.95, -0.45), 4326) LIMIT 1),
-    directed := false
-) AS route
-JOIN road_network ON route.id2 = road_network.id;
+    'SELECT gid AS id, source, target,
+            ST_Length(the_geom::geography) AS cost,
+            ST_Length(the_geom::geography) AS reverse_cost
+     FROM ways',
+    76, 1005,
+    directed := FALSE
+) AS d
+LEFT JOIN ways AS w ON d.edge = w.gid;
+
+-- Service area: All roads reachable within 5km from a vertex
+SELECT d.node, d.agg_cost, w.the_geom
+FROM pgr_drivingDistance(
+    'SELECT gid AS id, source, target,
+            ST_Length(the_geom::geography) AS cost,
+            ST_Length(the_geom::geography) AS reverse_cost
+     FROM ways',
+    76, 5000, directed := FALSE
+) d
+LEFT JOIN ways w ON d.edge = w.gid
+WHERE d.edge > 0;
 ```
 
 ## Technologies
